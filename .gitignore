@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Data (raw exports are re-downloadable via scripts, not versioned)
+data/raw/
+data/processed/
+
+# Environment / secrets
+.env
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/

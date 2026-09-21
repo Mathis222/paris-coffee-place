@@ -1,0 +1,11 @@
+pandas
+geopandas
+osmnx
+scikit-learn
+xgboost
+shap
+folium
+fastapi
+uvicorn
+streamlit
+requests
