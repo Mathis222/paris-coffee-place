@@ -1,4 +1,5 @@
 pandas
+pyarrow
 geopandas
 osmnx
 scikit-learn
