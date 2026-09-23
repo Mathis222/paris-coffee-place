@@ -31,13 +31,25 @@ Projet d'apprentissage : Mathis écrit tout le code lui-même dans VSCode, pas �
 
 **Étape 0 (Setup) : terminée.** `.venv`, `requirements.txt`, `.gitignore`, structure de dossiers (`data/raw`, `data/processed`, `src/ingestion`, `src/features`, `src/api`, `src/app`, `notebooks`, `tests`).
 
-**Étape 1 (Ingestion) : en cours.** `src/ingestion/sirene.py` contient à ce stade :
-- `explore_columns()` : liste les CSV présents dans un zip Sirene.
-- `read_csv()` : lit un chunk depuis un CSV zippé (sans extraction), affiche colonnes/valeurs uniques d'état/date max.
-- `filtre_paris_cafe()` : filtre un DataFrame sur NAF `56.30Z` + Paris.
-- `print_df()` : utilitaire d'affichage pour l'exploration.
+**Étape 1 (Ingestion) : terminée pour Sirene.**
+- `src/ingestion/utils.py` : `explore_columns()` (liste les CSV d'un zip Sirene), `print_df()` (utilitaire d'affichage exploratoire).
+- `src/ingestion/sirene.py` : `filtre_paris_cafe()` (filtre NAF `56.30Z` + Paris), `build_cafe_paris_dataset()` (lecture par chunks du fichier actuel, filtrage, accumulation) → sauvegarde `data/processed/siren-actual-processed.parquet`.
 
-**Prochaine tâche** : croiser la liste des `siret` cafés parisiens (fichier actuel) avec le fichier historique, en filtrant ce dernier par chunks sur `siret.isin(...)`, puis calculer par SIRET la date de fermeture (si elle existe) pour construire la cible de survie définitive.
+**Étape 2 (Construction du label) : label binaire terminé, flag chaîne/indépendant restant.**
+- `src/ingestion/labels.py` :
+  - `filtre_siret()` + `build_label()` : filtre le fichier historique par chunks sur la liste des `siret` cafés parisiens (résultat : ~17 300 lignes de transitions d'état pour ~5 700 cafés).
+  - `main()` : ne garde que les transitions réellement marquées comme changement d'état (`changementEtatAdministratifEtablissement == 'true'`) et fermées (`'F'`), groupe par `siret` pour prendre la date de fermeture la plus ancienne (`groupby('siret')['dateDebut'].min()`), merge sur le dataset actuel.
+  - **Label final `survecu_2ans`** (binaire) : seuil fixé à 2 ans. Calcul de `duree_annee_observee` = (date_fermeture − date_création) si fermé, sinon (date_référence fixe − date_création) si actif. Les cafés **encore actifs et observés depuis moins de 2 ans** sont **censurés** (label mis à `NaN` puis lignes supprimées) — on ne peut pas savoir s'ils passeront le seuil. Les cafés `'F'` sans transition trouvée dans l'historique (incohérence entre les deux fichiers Sirene, 71 cas rencontrés) sont traités pareil (exclus).
+  - Résultat sur les données actuelles : **5 652 cafés labellisés**, répartition **88 % survécu (4 958) / 12 % non-survécu (694)** — déséquilibré, à gérer au moment de l'entraînement (AUC/precision-recall plutôt qu'accuracy, pondération des classes).
+  - Sauvegarde : `data/processed/cafe-labeled.parquet`.
+  - Vérification faite : `dateDebut` (fichier actuel) et `dateFermeture` (calculée depuis l'historique) coïncident pour la quasi-totalité des cafés fermés testés — confirme que `dateDebut` d'une ligne historique à l'état `'F'` correspond bien à la date de fermeture. Un écart d'1 jour observé sur un cas isolé, probablement un cycle fermeture/réouverture rapide — à noter comme limite connue si ça revient.
+  - **Flag chaîne/indépendant** : `build_chaine_label()` — `df.groupby('siren')['siret'].transform('count')` (compte d'établissements café par siren, redistribué sur chaque ligne sans réduire le nombre de lignes, façon fenêtre SQL `COUNT(*) OVER (PARTITION BY siren)`), puis `est_chaine = nb_etablissement_siren > 1`. Résultat : 635 chaînes (~11%) / 5017 indépendants (~89%). Limite connue et non traitée : rate les franchises où chaque point de vente a un siren différent (signal par `enseigne1Etablissement` à ajouter plus tard si besoin).
+  - Sauvegarde finale : `data/processed/cafe-labeled-chaine.parquet`.
+- **Important — ce que le modèle prédit** : une ligne d'entraînement = un café passé/présent, `X` = caractéristiques de son **emplacement** au moment de l'ouverture (concurrence, transport, socio-démo...), `y` = a-t-il survécu ≥ 2 ans. Le modèle apprend un pattern "quel type d'emplacement favorise la survie", appliqué ensuite à une **nouvelle adresse** saisie par un utilisateur (sans historique). Piège de fuite de données identifié et évité : ne jamais utiliser la durée d'ouverture du café lui-même comme feature (elle n'existe pas pour une adresse qui n'a pas encore de café) — la durée sert uniquement à construire le label, pas à prédire dessus.
+
+**Étape 2 : terminée.**
+
+**Étape 3 (Feature engineering spatial) : à démarrer.** Prévu : ingestion RATP (trafic stations, proxy métro), Paris Data (zones piétonnes, compteurs vélo/routiers), INSEE Filosofi (pop/revenu par carreau), OSM via osmnx (POIs), distance/densité de concurrents, échantillon de points négatifs.
 
 ## Données locales (non versionnées, dans `data/raw/`, gitignored)
 
@@ -48,7 +60,7 @@ Téléchargeables sur https://www.data.gouv.fr/datasets/base-sirene-des-entrepri
 
 ## Points en attente / connus
 
-- **Push Git cassé** : le compte GitHub `Mathis222` est authentifié via `gh`, mais le token utilisé (fine-grained PAT) n'a pas les droits d'écriture sur le repo (403 en push, et même en listant les clés SSH). Tentative de bascule en SSH commencée (clé générée dans `~/.ssh/id_ed25519`) mais pas encore validée côté GitHub. À reprendre : soit corriger les permissions du token, soit finir la config SSH (ajouter la clé publique sur https://github.com/settings/ssh/new puis `git remote set-url origin git@github.com:Mathis222/paris-coffee-place.git`).
+- ~~Push Git cassé~~ **Résolu** : bascule en SSH (le token `gh` fine-grained n'avait pas les droits d'écriture). Remote configuré en `git@github.com:Mathis222/paris-coffee-place.git`, clé dans `~/.ssh/id_ed25519` ajoutée au compte GitHub. Push fonctionnel.
 
 ## Reprendre une session de travail
 
