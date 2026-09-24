@@ -49,7 +49,14 @@ Projet d'apprentissage : Mathis écrit tout le code lui-même dans VSCode, pas �
 
 **Étape 2 : terminée.**
 
-**Étape 3 (Feature engineering spatial) : à démarrer.** Prévu : ingestion RATP (trafic stations, proxy métro), Paris Data (zones piétonnes, compteurs vélo/routiers), INSEE Filosofi (pop/revenu par carreau), OSM via osmnx (POIs), distance/densité de concurrents, échantillon de points négatifs.
+**Étape 3 (Feature engineering spatial) : en cours.**
+- **RATP (métro)** : `src/ingestion/ratp.py`. Deux sources croisées : trafic annuel par station (data.ratp.fr) + coordonnées géographiques réelles des stations en Lambert93 (data.iledefrance-mobilites.fr — pas le dataset RATP "plan schématique", qui donne des pixels, pas de vraies coordonnées). Jointure sur nom de station harmonisé (`.str.upper()`, suffixe `-RER` retiré côté trafic pour recoller aux stations partagées métro/RER), doublons métro+RER fusionnés par `groupby('station_key').agg(...)` (trafic sommé). ~420 stations de banlieue hors périmètre RATP écartées (attendu, hors scope Paris). Résultat : `data/processed/ratp-processed.parquet`.
+- **Distance au métro + concurrents** : `src/features/localisation.py`. Coordonnées cafés = `coordonneeLambertAbscisseEtablissement/Ordonnee` du fichier Sirene actuel (déjà en Lambert93, pas besoin de géocoder pour les données d'entraînement — le géocodage BAN est réservé à l'adresse saisie par l'utilisateur final). Piège rencontré : la colonne contient parfois la valeur littérale `"[ND]"` (non déterminé) en plus des vrais `NaN` — nécessite `pd.to_numeric(..., errors='coerce')` avant tout calcul, sinon `min()/max()` sur une colonne texte donne un résultat absurde. ~1116 cafés sans coordonnées exploitables, exclus des features spatiales.
+  - `scipy.spatial.KDTree` utilisé pour toutes les requêtes de proximité (outil réutilisable, appris ici, à réutiliser pour tout calcul de distance/densité futur) : `.query()` pour le plus proche voisin (station de métro), `.query_ball_point()` pour compter les voisins dans un rayon (concurrents).
+  - Features produites : `dist_station_proche`, `trafic_station_proche`, `nb_voisin_200` (concurrents à 200m), `nb_voisin_500` (concurrents à 500m).
+  - Décision de conception : pas de somme pondérée par décroissance de distance façon Huff à ce stade (trafic multi-stations, "probabilité d'entrer au café") — trop de coefficients à inventer sans données pour les calibrer. Les features restent simples et brutes ; c'est à XGBoost d'apprendre les combinaisons non-linéaires utiles. La vraie pondération à la Huff est prévue à l'étape 4 dédiée.
+  - **Reste à faire** : sauvegarder le résultat (`.to_parquet`, pas encore fait).
+- **Pas commencé** : zones piétonnes (Paris Data), compteurs vélo/routiers (proxy rythme horaire), INSEE Filosofi (pop/revenu par carreau), POI OSM, échantillon de points négatifs/contrôle.
 
 ## Données locales (non versionnées, dans `data/raw/`, gitignored)
 
